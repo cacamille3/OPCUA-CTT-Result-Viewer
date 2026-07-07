@@ -62,7 +62,7 @@
 </head>
 <body>
 <header>
-  <h1>UACTT Results Viewer</h1>
+  <h1>OPC UA - CTT Results Viewer</h1>
   <input type="file" id="file" accept=".xml">
   <div class="controls">
     <input type="text" id="search" placeholder="Filter by name…">
@@ -224,25 +224,40 @@ function escapeHtml(s){ return s.replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;',
 
 // ---- collapse / expand ----
 function childrenOf(id){ return [...document.querySelectorAll('tr.node[data-parent="'+id+'"]')]; }
-function setCollapsed(tr, collapsed){
+function setCaret(tr, collapsed){
   const caret = tr.querySelector('[data-toggle]');
   if (caret) caret.textContent = collapsed ? '▸' : '▾';
-  tr.dataset.collapsed = collapsed ? '1':'0';
-  hideDescendants(tr.dataset.id, collapsed);
 }
-function hideDescendants(id, hide){
-  childrenOf(id).forEach(ch=>{
-    ch.dataset.hiddenByParent = hide ? '1':'0';
-    const childCollapsed = ch.dataset.collapsed === '1';
-    hideDescendants(ch.dataset.id, hide || childCollapsed);
-    updateVisibility(ch);
+// Recompute hiddenByParent for every row from its ancestors' collapsed flags.
+function recomputeHidden(){
+  const rows = [...document.querySelectorAll('tr.node')];
+  const byId = {}; rows.forEach(t=>{ byId[t.dataset.id] = t; });
+  rows.forEach(tr=>{
+    let hidden = false, pid = tr.dataset.parent;
+    while (pid && pid !== '0' && byId[pid]) {
+      if (byId[pid].dataset.collapsed === '1') { hidden = true; break; }
+      pid = byId[pid].dataset.parent;
+    }
+    tr.dataset.hiddenByParent = hidden ? '1' : '0';
   });
+}
+function refreshVisibility(){ document.querySelectorAll('tr.node').forEach(updateVisibility); }
+function setCollapsed(tr, collapsed){
+  tr.dataset.collapsed = collapsed ? '1':'0';
+  setCaret(tr, collapsed);
+  recomputeHidden();
+  refreshVisibility();
 }
 function collapseDeeper(maxDepth){
   document.querySelectorAll('tr.node').forEach(tr=>{
-    if (+tr.dataset.depth >= maxDepth && childrenOf(tr.dataset.id).length)
-      setCollapsed(tr, true);
+    if (childrenOf(tr.dataset.id).length) {
+      const c = (+tr.dataset.depth >= maxDepth);
+      tr.dataset.collapsed = c ? '1':'0';
+      setCaret(tr, c);
+    }
   });
+  recomputeHidden();
+  refreshVisibility();
 }
 
 // ---- filters ----
@@ -289,17 +304,26 @@ function applyFilters(){
     });
   }
 
-  // pass 3: apply visibility (a row shows if it matches, or is an ancestor of a match)
+  // pass 3: filter membership -> filtered flag (show if it matches or is an ancestor of a match)
   rows.forEach(tr=>{
     const keep = tr.dataset.match === '1' || (narrowing && tr.dataset.ancestor === '1');
     tr.dataset.filtered = keep ? '0' : '1';
-    updateVisibility(tr);
   });
+  // when narrowing, auto-expand the ancestor chains so matches are revealed;
+  // the user can still collapse/expand those groups within the filtered view.
+  if (narrowing) {
+    rows.forEach(tr=>{
+      if (tr.dataset.ancestor === '1' && childrenOf(tr.dataset.id).length) {
+        tr.dataset.collapsed = '0'; setCaret(tr, false);
+      }
+    });
+  }
+  recomputeHidden();
+  refreshVisibility();
 }
-let narrowing = false;   // true when a row-narrowing filter is active -> ignore tree collapse
+let narrowing = false;   // true when a row-narrowing filter is active
 function updateVisibility(tr){
-  const byParent = narrowing ? false : (tr.dataset.hiddenByParent==='1');
-  const hidden = tr.dataset.filtered==='1' || byParent;
+  const hidden = tr.dataset.filtered==='1' || tr.dataset.hiddenByParent==='1';
   tr.style.display = hidden ? 'none' : '';
 }
 
@@ -324,7 +348,10 @@ document.addEventListener('click', e=>{
 $('search').addEventListener('input', applyFilters);
 $('hideTrace').addEventListener('change', applyFilters);
 $('onlyProblems').addEventListener('change', applyFilters);
-$('expandAll').addEventListener('click', ()=>{ document.querySelectorAll('tr.node').forEach(tr=>{if(childrenOf(tr.dataset.id).length) setCollapsed(tr,false);}); });
+$('expandAll').addEventListener('click', ()=>{
+  document.querySelectorAll('tr.node').forEach(tr=>{ if(childrenOf(tr.dataset.id).length){ tr.dataset.collapsed='0'; setCaret(tr,false); } });
+  recomputeHidden(); refreshVisibility();
+});
 $('collapseAll').addEventListener('click', ()=>collapseDeeper(1));
 
 // drag & drop
