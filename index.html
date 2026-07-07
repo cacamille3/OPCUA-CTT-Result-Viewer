@@ -87,8 +87,8 @@
 // Different OPC UA CTT versions use different testresult NUMBERS for the same
 // meaning. We map each version's numbers to a shared set of CATEGORIES, then
 // color/label by category. Two schemes are known:
-//   new    (OPC UA 1.4.12+, has binaryversion + groupkey): Backtrace=7, OK=6
-//   legacy (older tool, no version/groupkey attrs):        Backtrace=6, OK=5
+//   new    (OPC UA CTT 1.4.12+, has binaryversion + groupkey): Backtrace=7, OK=6
+//   legacy (older tool, no version/groupkey attrs):    Backtrace=6, OK=5
 const CAT = {
   error:   {l:'Error',           c:'c-err'},
   warn:    {l:'Warning',         c:'c-warn'},
@@ -259,14 +259,40 @@ function applyFilters(){
   const hideTrace = $('hideTrace').checked;
   const onlyProb = $('onlyProblems').checked;
   narrowing = (activeCode!==null) || onlyProb || q.length>0;
-  document.querySelectorAll('tr.node').forEach(tr=>{
+
+  const rows = [...document.querySelectorAll('tr.node')];
+  const byId = {};
+  rows.forEach(tr => { byId[tr.dataset.id] = tr; });
+
+  // pass 1: does each row match the active filters on its own?
+  rows.forEach(tr=>{
     let ok = true;
     // result-code filter matches the summary: only real test cases of that code
     if (activeCode!==null && !(tr.dataset.tc==='1' && tr.dataset.code===String(activeCode))) ok = false;
     if (hideTrace && tr.dataset.trace==='1') ok = false;
     if (onlyProb && !(tr.dataset.code==='0'||tr.dataset.code==='1')) ok = false;
     if (q && !tr.dataset.name.includes(q)) ok = false;
-    tr.dataset.filtered = ok ? '0':'1';
+    tr.dataset.match = ok ? '1':'0';
+    tr.dataset.ancestor = '0';
+  });
+
+  // pass 2: when a narrowing filter is active, keep each match's ANCESTORS
+  // (conformance group / unit) visible so you can see where the match lives.
+  if (narrowing) {
+    rows.forEach(tr=>{
+      if (tr.dataset.match !== '1') return;
+      let pid = tr.dataset.parent;
+      while (pid && pid !== '0' && byId[pid] && byId[pid].dataset.ancestor !== '1') {
+        byId[pid].dataset.ancestor = '1';
+        pid = byId[pid].dataset.parent;
+      }
+    });
+  }
+
+  // pass 3: apply visibility (a row shows if it matches, or is an ancestor of a match)
+  rows.forEach(tr=>{
+    const keep = tr.dataset.match === '1' || (narrowing && tr.dataset.ancestor === '1');
+    tr.dataset.filtered = keep ? '0' : '1';
     updateVisibility(tr);
   });
 }
