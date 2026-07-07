@@ -28,7 +28,7 @@ Open the `.xml` produced by a CTT run and get an instant, color-coded, collapsib
 
 ## Usage
 
-1. Open the page in your web browser
+1. Open https://cacamille3.github.io/OPCUA-CTT-Result-Viewer/ or local copy of index.html in your web browser
 2. **Double-click** it (opens in Chrome, Edge, or Firefox), or serve it however you like.
 3. Click **Choose File** and pick your CTT result `.xml` — or **drag the file onto the window**.
 
