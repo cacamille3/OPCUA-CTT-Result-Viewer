@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPC UA - CTT Results Viewer</title>
+<style>
+  :root {
+    --bg:#1e1e1e; --panel:#252526; --border:#3c3c3c; --text:#d4d4d4; --muted:#888;
+    --ok:#2ea043; --err:#f14c4c; --warn:#d7883e; --rec:#c9a227; --skip:#6b7785;
+    --ns:#4a7a96; --info:#3794ff; --trace:#555; --ni:#8a6d9c;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.4 "Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:12px 16px; background:var(--panel); border-bottom:1px solid var(--border);
+           position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  input[type=file] { color:var(--text); }
+  .controls { display:flex; gap:14px; align-items:center; margin-left:auto; flex-wrap:wrap; }
+  label.chk { cursor:pointer; user-select:none; color:var(--muted); }
+  #search { background:#333; border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:4px; width:200px; }
+
+  #banner { margin:0; padding:10px 16px; font-weight:600; display:none; }
+  #banner.show { display:block; }
+
+  #summary { padding:8px 16px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .pill { padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; color:#fff;
+          cursor:pointer; user-select:none; border:2px solid transparent; opacity:.85; }
+  .pill:hover { opacity:1; }
+  .pill.active { opacity:1; border-color:#fff; box-shadow:0 0 0 1px #000 inset; }
+  .badge { cursor:pointer; }
+  #clearFilter { margin-left:4px; background:#333; border:1px solid var(--border); color:var(--muted);
+                 padding:2px 10px; border-radius:12px; font-size:12px; cursor:pointer; display:none; }
+  #clearFilter.show { display:inline-block; }
+
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid #2a2a2a; vertical-align:top; }
+  th { position:sticky; top:0; background:var(--panel); color:var(--muted); font-weight:600; z-index:2;
+       border-bottom:1px solid var(--border); }
+  tr.node:hover { background:#2a2d2e; }
+  .caret { cursor:pointer; display:inline-block; width:14px; color:var(--muted); }
+  .name-cell { white-space:nowrap; }
+  .desc { color:var(--muted); white-space:pre-wrap; }
+  .ts { color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; }
+
+  .badge { display:inline-block; min-width:96px; text-align:center; padding:1px 8px; border-radius:4px;
+           font-size:11px; font-weight:700; color:#fff; }
+  /* colored by MEANING (category), not raw code, so both CTT schemes work */
+  .c-err{background:var(--err)} .c-warn{background:var(--warn)} .c-rec{background:var(--rec)}
+  .c-ni{background:var(--ni)} .c-skip{background:var(--skip)} .c-ns{background:var(--ns)}
+  .c-ok{background:var(--ok)} .c-trace{background:var(--trace)} .c-info{background:var(--info)}
+  /* left accent bar on the name cell colored by result category */
+  td.name-cell{border-left:3px solid transparent}
+  tr.cat-err td.name-cell{border-left-color:var(--err)} tr.cat-warn td.name-cell{border-left-color:var(--warn)}
+  tr.cat-rec td.name-cell{border-left-color:var(--rec)} tr.cat-ok td.name-cell{border-left-color:var(--ok)}
+  tr.cat-skip td.name-cell{border-left-color:var(--skip)} tr.cat-ns td.name-cell{border-left-color:var(--ns)}
+  tr.cat-ni td.name-cell{border-left-color:var(--ni)}
+
+  #empty { padding:40px 16px; color:var(--muted); }
+  code { background:#333; padding:1px 5px; border-radius:3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>UACTT Results Viewer</h1>
+  <input type="file" id="file" accept=".xml">
+  <div class="controls">
+    <input type="text" id="search" placeholder="Filter by name…">
+    <label class="chk"><input type="checkbox" id="hideTrace" checked> hide Backtrace</label>
+    <label class="chk"><input type="checkbox" id="onlyProblems"> only errors/warnings</label>
+    <button id="expandAll">Expand all</button>
+    <button id="collapseAll">Collapse all</button>
+  </div>
+</header>
+
+<div id="banner"></div>
+<div id="summary"></div>
+
+<div id="empty">Open a <code>*.results.xml</code> file (or drag it onto this window) to begin.</div>
+
+<table id="tbl" hidden>
+  <thead><tr><th>Name</th><th style="width:120px">Result</th><th style="width:170px">Timestamp</th><th>Description</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+// Different OPC UA CTT versions use different testresult NUMBERS for the same
+// meaning. We map each version's numbers to a shared set of CATEGORIES, then
+// color/label by category. Two schemes are known:
+//   new    (OPC UA 1.4.12+, has binaryversion + groupkey): Backtrace=7, OK=6
+//   legacy (older tool, no version/groupkey attrs):        Backtrace=6, OK=5
+const CAT = {
+  error:   {l:'Error',           c:'c-err'},
+  warn:    {l:'Warning',         c:'c-warn'},
+  rec:     {l:'Recommendation',  c:'c-rec'},
+  notimpl: {l:'Not Implemented', c:'c-ni'},
+  skip:    {l:'Skipped',         c:'c-skip'},
+  ns:      {l:'Not Supported',   c:'c-ns'},
+  ok:      {l:'OK',              c:'c-ok'},
+  trace:   {l:'Backtrace',       c:'c-trace'},
+};
+const SCHEMES = {
+  'new':    {0:'error',1:'warn',2:'rec',    3:'notimpl',4:'skip',5:'ns',   6:'ok',   7:'trace'},
+  'legacy': {0:'error',1:'warn',2:'notimpl',3:'skip',   4:'ns',  5:'ok',   6:'trace'},
+};
+let scheme = 'new';                 // set per file in render()
+function catOf(code){ return (SCHEMES[scheme]||{})[code] || 'info'; }
+function meta(code){ return CAT[catOf(code)] || {l:'('+code+')', c:'c-info'}; }
+
+// Decide which scheme a parsed document uses.
+function detectScheme(doc){
+  // strongest signals for the "new" tool: version attrs or groupkey markers
+  const root = doc.querySelector('UaCttResults > ResultNode') || doc.querySelector('ResultNode');
+  if (root && (root.hasAttribute('binaryversion') || root.hasAttribute('scriptversion')
+               || root.hasAttribute('specificationversion'))) return 'new';
+  if (doc.querySelector('[groupkey]')) return 'new';
+  // otherwise inspect a Backtrace node: code 7 => new, code 6 => legacy
+  const bt = doc.querySelector('ResultNode[name="Backtrace"]');
+  if (bt) return (+bt.getAttribute('testresult') === 7) ? 'new' : 'legacy';
+  return 'new';
+}
+
+const SETUP = new Set(['initialize.js','cleanup.js','beforeTest.js','afterTest.js']);
+function isTestCaseNode(node){
+  const nm = node.getAttribute('name') || '';
+  if (SETUP.has(nm)) return false;
+  if (node.getAttribute('groupkey') && node.getAttribute('unitkey')) return true; // new scheme
+  if (scheme === 'legacy' && /\.js$/i.test(nm)) return true;                      // legacy fallback
+  return false;
+}
+
+const $ = id => document.getElementById(id);
+let uid = 0;
+
+function render(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  const perr = doc.querySelector('parsererror');
+  if (perr){ alert('XML parse error:\n' + perr.textContent); return; }
+  const root = doc.querySelector('UaCttResults > ResultNode') || doc.querySelector('ResultNode');
+  if (!root){ alert('No <ResultNode> found.'); return; }
+
+  scheme = detectScheme(doc);          // pick the code convention for THIS file
+
+  const rows = $('rows'); rows.innerHTML = ''; uid = 0;
+  const counts = {};
+
+  function walk(node, depth, parentId){
+    const code = parseInt(node.getAttribute('testresult'), 10);
+    const cat = catOf(code);
+    const m = meta(code);
+    const id = ++uid;
+    const kids = [...node.children].filter(c => c.tagName === 'ResultNode');
+
+    const isTC = isTestCaseNode(node);                // scheme-aware test-case detection
+    if (isTC) counts[code] = (counts[code]||0) + 1;   // summary counts test cases only
+
+    const tr = document.createElement('tr');
+    tr.className = 'node cat-' + cat;
+    tr.dataset.id = id; tr.dataset.parent = parentId; tr.dataset.depth = depth;
+    tr.dataset.code = code; tr.dataset.trace = (cat==='trace')?'1':'0';
+    tr.dataset.tc = isTC ? '1':'0';
+    tr.dataset.name = (node.getAttribute('name')||'').toLowerCase();
+
+    const name = node.getAttribute('name') || '(node)';
+    const ts = node.getAttribute('timestamp') || '';
+    const desc = node.getAttribute('description') || '';
+    const caret = kids.length ? '<span class="caret" data-toggle>▸</span>' : '<span class="caret"></span>';
+    const pad = depth * 18;
+
+    tr.innerHTML =
+      '<td class="name-cell" style="padding-left:'+(8+pad)+'px">'+caret+
+        '<span>'+escapeHtml(name)+'</span></td>'+
+      '<td><span class="badge '+m.c+'">'+m.l+'</span></td>'+
+      '<td class="ts">'+escapeHtml(ts)+'</td>'+
+      '<td class="desc">'+escapeHtml(desc)+'</td>';
+    rows.appendChild(tr);
+
+    kids.forEach(k => walk(k, depth+1, id));
+  }
+  walk(root, 0, 0);
+
+  // global banner from the root result (colored by category, scheme-independent)
+  const rc = parseInt(root.getAttribute('testresult'),10);
+  const rcat = catOf(rc);
+  const rm = meta(rc);
+  const banner = $('banner');
+  banner.className = 'show';
+  const colorVar = {error:'--err',warn:'--warn',ok:'--ok'}[rcat] || '--info';
+  banner.style.background = getComputedStyle(document.documentElement).getPropertyValue(colorVar);
+  const ver = root.getAttribute('specificationversion');
+  banner.textContent = 'Global result: ' + rm.l + '  —  ' + (root.getAttribute('name')||'')
+      + (ver ? '   (' + ver + ')' : '')
+      + '   ·   format: ' + scheme;
+
+  // summary pills (clickable -> filter by that result code). Counts = test cases only.
+  const sum = $('summary'); sum.innerHTML = '';
+  const totalTC = Object.values(counts).reduce((a,b)=>a+b,0);
+  const tot = document.createElement('span');
+  tot.style.cssText = 'font-weight:600;color:var(--muted);margin-right:4px';
+  tot.textContent = totalTC + ' test cases:';
+  sum.appendChild(tot);
+  Object.keys(counts).sort((a,b)=>a-b).forEach(code=>{
+    const m = meta(+code);
+    const el = document.createElement('span');
+    el.className = 'pill ' + m.c;
+    el.dataset.code = code;
+    el.textContent = m.l + ': ' + counts[code];
+    el.title = 'Click to show only "' + m.l + '"';
+    sum.appendChild(el);
+  });
+  const clr = document.createElement('span');
+  clr.id = 'clearFilter'; clr.textContent = '✕ clear';
+  clr.title = 'Clear result-type filter';
+  sum.appendChild(clr);
+
+  $('empty').hidden = true;
+  $('tbl').hidden = false;
+  applyFilters();
+  // collapse to top 2 levels by default
+  collapseDeeper(2);
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// ---- collapse / expand ----
+function childrenOf(id){ return [...document.querySelectorAll('tr.node[data-parent="'+id+'"]')]; }
+function setCollapsed(tr, collapsed){
+  const caret = tr.querySelector('[data-toggle]');
+  if (caret) caret.textContent = collapsed ? '▸' : '▾';
+  tr.dataset.collapsed = collapsed ? '1':'0';
+  hideDescendants(tr.dataset.id, collapsed);
+}
+function hideDescendants(id, hide){
+  childrenOf(id).forEach(ch=>{
+    ch.dataset.hiddenByParent = hide ? '1':'0';
+    const childCollapsed = ch.dataset.collapsed === '1';
+    hideDescendants(ch.dataset.id, hide || childCollapsed);
+    updateVisibility(ch);
+  });
+}
+function collapseDeeper(maxDepth){
+  document.querySelectorAll('tr.node').forEach(tr=>{
+    if (+tr.dataset.depth >= maxDepth && childrenOf(tr.dataset.id).length)
+      setCollapsed(tr, true);
+  });
+}
+
+// ---- filters ----
+let activeCode = null;   // result code selected via a pill/badge, or null
+function setCodeFilter(code){
+  activeCode = (activeCode === code) ? null : code;   // toggle
+  document.querySelectorAll('.pill').forEach(p=>
+    p.classList.toggle('active', activeCode!==null && p.dataset.code===String(activeCode)));
+  const clr = $('clearFilter'); if (clr) clr.classList.toggle('show', activeCode!==null);
+  applyFilters();
+}
+function applyFilters(){
+  const q = $('search').value.trim().toLowerCase();
+  const hideTrace = $('hideTrace').checked;
+  const onlyProb = $('onlyProblems').checked;
+  narrowing = (activeCode!==null) || onlyProb || q.length>0;
+  document.querySelectorAll('tr.node').forEach(tr=>{
+    let ok = true;
+    // result-code filter matches the summary: only real test cases of that code
+    if (activeCode!==null && !(tr.dataset.tc==='1' && tr.dataset.code===String(activeCode))) ok = false;
+    if (hideTrace && tr.dataset.trace==='1') ok = false;
+    if (onlyProb && !(tr.dataset.code==='0'||tr.dataset.code==='1')) ok = false;
+    if (q && !tr.dataset.name.includes(q)) ok = false;
+    tr.dataset.filtered = ok ? '0':'1';
+    updateVisibility(tr);
+  });
+}
+let narrowing = false;   // true when a row-narrowing filter is active -> ignore tree collapse
+function updateVisibility(tr){
+  const byParent = narrowing ? false : (tr.dataset.hiddenByParent==='1');
+  const hidden = tr.dataset.filtered==='1' || byParent;
+  tr.style.display = hidden ? 'none' : '';
+}
+
+// ---- events ----
+$('file').addEventListener('change', e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader(); r.onload = ()=>render(r.result); r.readAsText(f);
+});
+document.addEventListener('click', e=>{
+  // expand/collapse caret
+  const t = e.target.closest('[data-toggle]');
+  if (t){ const tr = t.closest('tr'); setCollapsed(tr, tr.dataset.collapsed!=='1'); return; }
+  // clear result-type filter
+  if (e.target.id === 'clearFilter'){ if(activeCode!==null) setCodeFilter(activeCode); return; }
+  // click a summary pill -> filter by that result code
+  const pill = e.target.closest('.pill');
+  if (pill){ setCodeFilter(+pill.dataset.code); return; }
+  // click a test-case row's result badge -> filter by that result code
+  const badge = e.target.closest('.badge');
+  if (badge){ const tr = badge.closest('tr.node'); if(tr && tr.dataset.tc==='1') setCodeFilter(+tr.dataset.code); return; }
+});
+$('search').addEventListener('input', applyFilters);
+$('hideTrace').addEventListener('change', applyFilters);
+$('onlyProblems').addEventListener('change', applyFilters);
+$('expandAll').addEventListener('click', ()=>{ document.querySelectorAll('tr.node').forEach(tr=>{if(childrenOf(tr.dataset.id).length) setCollapsed(tr,false);}); });
+$('collapseAll').addEventListener('click', ()=>collapseDeeper(1));
+
+// drag & drop
+['dragover','drop'].forEach(ev=>document.addEventListener(ev, e=>e.preventDefault()));
+document.addEventListener('drop', e=>{
+  const f = e.dataTransfer.files[0]; if(!f) return;
+  const r = new FileReader(); r.onload = ()=>render(r.result); r.readAsText(f);
+});
+</script>
+</body>
+</html>
