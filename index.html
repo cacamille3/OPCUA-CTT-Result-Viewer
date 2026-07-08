@@ -136,8 +136,10 @@ function render(xmlText){
   const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
   const perr = doc.querySelector('parsererror');
   if (perr){ alert('XML parse error:\n' + perr.textContent); return; }
-  const root = doc.querySelector('UaCttResults > ResultNode') || doc.querySelector('ResultNode');
-  if (!root){ alert('No <ResultNode> found.'); return; }
+  // a file may contain more than one run (Debug Run1, Debug Run2, …) as siblings
+  let runs = [...doc.querySelectorAll('UaCttResults > ResultNode')];
+  if (!runs.length){ const r = doc.querySelector('ResultNode'); if (r) runs = [r]; }
+  if (!runs.length){ alert('No <ResultNode> found.'); return; }
 
   scheme = detectScheme(doc);          // pick the code convention for THIS file
 
@@ -177,20 +179,27 @@ function render(xmlText){
 
     kids.forEach(k => walk(k, depth+1, id));
   }
-  walk(root, 0, 0);
+  runs.forEach(run => walk(run, 0, 0));   // each run is its own top-level subtree
 
-  // global banner from the root result (colored by category, scheme-independent)
-  const rc = parseInt(root.getAttribute('testresult'),10);
-  const rcat = catOf(rc);
-  const rm = meta(rc);
+  // global banner (colored by the most severe run result, scheme-independent)
+  const catRank = { error:0, warn:1, rec:2, ns:3, notimpl:4, skip:5, ok:6, trace:7 };
+  const runResults = runs.map(r=>{
+    const c = parseInt(r.getAttribute('testresult'),10);
+    return { name: r.getAttribute('name')||'', cat: catOf(c), label: meta(c).l };
+  });
+  let worst = runResults[0].cat;
+  runResults.forEach(r=>{ if ((catRank[r.cat]??9) < (catRank[worst]??9)) worst = r.cat; });
   const banner = $('banner');
   banner.className = 'show';
-  const colorVar = {error:'--err',warn:'--warn',ok:'--ok'}[rcat] || '--info';
+  const colorVar = {error:'--err',warn:'--warn',ok:'--ok'}[worst] || '--info';
   banner.style.background = getComputedStyle(document.documentElement).getPropertyValue(colorVar);
-  const ver = root.getAttribute('specificationversion');
-  banner.textContent = 'Global result: ' + rm.l + '  —  ' + (root.getAttribute('name')||'')
-      + (ver ? '   (' + ver + ')' : '')
-      + '   ·   format: ' + scheme;
+  const ver = runs[0].getAttribute('specificationversion');
+  banner.textContent = (runs.length === 1)
+    ? 'Global result: ' + runResults[0].label + '  —  ' + runResults[0].name
+        + (ver ? '   (' + ver + ')' : '') + '   ·   format: ' + scheme
+    : runs.length + ' runs  —  '
+        + runResults.map(r=> r.name + ': ' + r.label).join('   ·   ')
+        + (ver ? '   (' + ver + ')' : '') + '   ·   format: ' + scheme;
 
   // summary pills (clickable -> filter by that result code). Counts = test cases only.
   const sum = $('summary'); sum.innerHTML = '';
