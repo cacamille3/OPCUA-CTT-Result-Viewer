@@ -19,6 +19,7 @@
   .controls { display:flex; gap:14px; align-items:center; margin-left:auto; flex-wrap:wrap; }
   label.chk { cursor:pointer; user-select:none; color:var(--muted); }
   #search { background:#333; border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:4px; width:200px; }
+  #runSel { background:#333; border:1px solid var(--border); color:var(--text); padding:3px 8px; border-radius:4px; }
 
   #banner { margin:0; padding:10px 16px; font-weight:600; display:none; }
   #banner.show { display:block; }
@@ -144,9 +145,9 @@ function render(xmlText){
   scheme = detectScheme(doc);          // pick the code convention for THIS file
 
   const rows = $('rows'); rows.innerHTML = ''; uid = 0;
-  const counts = {};
+  countsByRun = []; runNames = []; activeRun = null; activeCode = null;
 
-  function walk(node, depth, parentId){
+  function walk(node, depth, parentId, runIdx){
     const code = parseInt(node.getAttribute('testresult'), 10);
     const cat = catOf(code);
     const m = meta(code);
@@ -154,13 +155,14 @@ function render(xmlText){
     const kids = [...node.children].filter(c => c.tagName === 'ResultNode');
 
     const isTC = isTestCaseNode(node);                // scheme-aware test-case detection
-    if (isTC) counts[code] = (counts[code]||0) + 1;   // summary counts test cases only
+    if (isTC) countsByRun[runIdx][code] = (countsByRun[runIdx][code]||0) + 1; // summary counts test cases only, per run
 
     const tr = document.createElement('tr');
     tr.className = 'node cat-' + cat;
     tr.dataset.id = id; tr.dataset.parent = parentId; tr.dataset.depth = depth;
     tr.dataset.code = code; tr.dataset.trace = (cat==='trace')?'1':'0';
     tr.dataset.tc = isTC ? '1':'0';
+    tr.dataset.run = runIdx;
     tr.dataset.name = (node.getAttribute('name')||'').toLowerCase();
 
     const name = node.getAttribute('name') || '(node)';
@@ -177,9 +179,13 @@ function render(xmlText){
       '<td class="desc">'+escapeHtml(desc)+'</td>';
     rows.appendChild(tr);
 
-    kids.forEach(k => walk(k, depth+1, id));
+    kids.forEach(k => walk(k, depth+1, id, runIdx));
   }
-  runs.forEach(run => walk(run, 0, 0));   // each run is its own top-level subtree
+  runs.forEach((run, i) => {              // each run is its own top-level subtree
+    countsByRun.push({});
+    runNames.push(run.getAttribute('name') || ('Run ' + (i+1)));
+    walk(run, 0, 0, i);
+  });
 
   // global banner (colored by the most severe run result, scheme-independent)
   const catRank = { error:0, warn:1, rec:2, ns:3, notimpl:4, skip:5, ok:6, trace:7 };
@@ -201,26 +207,27 @@ function render(xmlText){
         + runResults.map(r=> r.name + ': ' + r.label).join('   ·   ')
         + (ver ? '   (' + ver + ')' : '') + '   ·   format: ' + scheme;
 
-  // summary pills (clickable -> filter by that result code). Counts = test cases only.
+  // run selector (only when the file holds several runs) + summary pills
   const sum = $('summary'); sum.innerHTML = '';
-  const totalTC = Object.values(counts).reduce((a,b)=>a+b,0);
-  const tot = document.createElement('span');
-  tot.style.cssText = 'font-weight:600;color:var(--muted);margin-right:4px';
-  tot.textContent = totalTC + ' test cases:';
-  sum.appendChild(tot);
-  Object.keys(counts).sort((a,b)=>a-b).forEach(code=>{
-    const m = meta(+code);
-    const el = document.createElement('span');
-    el.className = 'pill ' + m.c;
-    el.dataset.code = code;
-    el.textContent = m.l + ': ' + counts[code];
-    el.title = 'Click to show only "' + m.l + '"';
-    sum.appendChild(el);
-  });
-  const clr = document.createElement('span');
-  clr.id = 'clearFilter'; clr.textContent = '✕ clear';
-  clr.title = 'Clear result-type filter';
-  sum.appendChild(clr);
+  if (runs.length > 1){
+    const sel = document.createElement('select');
+    sel.id = 'runSel';
+    sel.title = 'Restrict the view and the counts to a single run';
+    sel.innerHTML = '<option value="">All runs</option>' +
+      runNames.map((n,i)=>'<option value="'+i+'">'+escapeHtml(n)+'</option>').join('');
+    sel.addEventListener('change', ()=>{
+      activeRun = sel.value === '' ? null : +sel.value;
+      // drop the result-type filter if the selected run has no such test case
+      if (activeCode !== null && !(activeCode in currentCounts())) activeCode = null;
+      renderSummary();
+      applyFilters();
+    });
+    sum.appendChild(sel);
+  }
+  const pillBox = document.createElement('span');
+  pillBox.id = 'pills'; pillBox.style.display = 'contents';
+  sum.appendChild(pillBox);
+  renderSummary();
 
   $('empty').hidden = true;
   $('tbl').hidden = false;
@@ -269,6 +276,42 @@ function collapseDeeper(maxDepth){
   refreshVisibility();
 }
 
+// ---- summary (per-run counts) ----
+let activeRun = null;    // run index selected in #runSel, or null for all runs
+let countsByRun = [];    // per-run {code: testCaseCount}
+let runNames = [];       // display name of each run
+
+function currentCounts(){
+  if (activeRun !== null) return countsByRun[activeRun] || {};
+  const merged = {};
+  countsByRun.forEach(c => Object.keys(c).forEach(k => { merged[k] = (merged[k]||0) + c[k]; }));
+  return merged;
+}
+// (Re)build the total + pills from the counts of the selected run (or all runs).
+function renderSummary(){
+  const counts = currentCounts();
+  const box = $('pills'); box.innerHTML = '';
+  const totalTC = Object.values(counts).reduce((a,b)=>a+b,0);
+  const tot = document.createElement('span');
+  tot.style.cssText = 'font-weight:600;color:var(--muted);margin-right:4px';
+  tot.textContent = totalTC + ' test cases:';
+  box.appendChild(tot);
+  Object.keys(counts).sort((a,b)=>a-b).forEach(code=>{
+    const m = meta(+code);
+    const el = document.createElement('span');
+    el.className = 'pill ' + m.c + (activeCode !== null && +code === activeCode ? ' active' : '');
+    el.dataset.code = code;
+    el.textContent = m.l + ': ' + counts[code];
+    el.title = 'Click to show only "' + m.l + '"';
+    box.appendChild(el);
+  });
+  const clr = document.createElement('span');
+  clr.id = 'clearFilter'; clr.textContent = '✕ clear';
+  clr.title = 'Clear result-type filter';
+  if (activeCode !== null) clr.className = 'show';
+  box.appendChild(clr);
+}
+
 // ---- filters ----
 let activeCode = null;   // result code selected via a pill/badge, or null
 function setCodeFilter(code){
@@ -291,6 +334,9 @@ function applyFilters(){
   // pass 1: does each row match the active filters on its own?
   rows.forEach(tr=>{
     let ok = true;
+    // run filter: hide every row belonging to another run (not a "narrowing"
+    // filter — the selected run keeps its full tree structure)
+    if (activeRun!==null && tr.dataset.run!==String(activeRun)) ok = false;
     // result-code filter matches the summary: only real test cases of that code
     if (activeCode!==null && !(tr.dataset.tc==='1' && tr.dataset.code===String(activeCode))) ok = false;
     if (hideTrace && tr.dataset.trace==='1') ok = false;
