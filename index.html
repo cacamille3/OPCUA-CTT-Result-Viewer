@@ -167,7 +167,13 @@ function render(xmlText){
 
     const name = node.getAttribute('name') || '(node)';
     const ts = node.getAttribute('timestamp') || '';
-    const desc = node.getAttribute('description') || '';
+    // Backtrace nodes carry no description; surface their location attributes instead.
+    let desc = node.getAttribute('description') || '';
+    if (cat === 'trace') {
+      desc = 'function: ' + (node.getAttribute('functionname') || '') +
+             '\r\nfile: ' + (node.getAttribute('filename') || '') +
+             '\r\nline: ' + (node.getAttribute('linenumber') || '');
+    }
     const caret = kids.length ? '<span class="caret" data-toggle>▸</span>' : '<span class="caret"></span>';
     const pad = depth * 18;
 
