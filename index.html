@@ -365,6 +365,21 @@ function applyFilters(){
     });
   }
 
+  // pass 2b: when narrowing, keep descendants of matching nodes visible
+  // (so e.g. backtrace children of a filtered test case are shown),
+  // unless hideTrace is enabled.
+  if (narrowing) {
+    rows.forEach(tr=>{
+      if (tr.dataset.match === '1' || tr.dataset.ancestor === '1') return;
+      if (hideTrace && tr.dataset.trace === '1') return;
+      let pid = tr.dataset.parent;
+      while (pid && pid !== '0' && byId[pid]) {
+        if (byId[pid].dataset.match === '1') { tr.dataset.ancestor = '1'; break; }
+        pid = byId[pid].dataset.parent;
+      }
+    });
+  }
+
   // pass 3: filter membership -> filtered flag (show if it matches or is an ancestor of a match)
   rows.forEach(tr=>{
     const keep = tr.dataset.match === '1' || (narrowing && tr.dataset.ancestor === '1');
