@@ -52,10 +52,10 @@
   .c-ok{background:var(--ok)} .c-trace{background:var(--trace)} .c-info{background:var(--info)}
   /* left accent bar on the name cell colored by result category */
   td.name-cell{border-left:3px solid transparent}
-  tr.cat-err td.name-cell{border-left-color:var(--err)} tr.cat-warn td.name-cell{border-left-color:var(--warn)}
+  tr.cat-error td.name-cell{border-left-color:var(--err)} tr.cat-warn td.name-cell{border-left-color:var(--warn)}
   tr.cat-rec td.name-cell{border-left-color:var(--rec)} tr.cat-ok td.name-cell{border-left-color:var(--ok)}
   tr.cat-skip td.name-cell{border-left-color:var(--skip)} tr.cat-ns td.name-cell{border-left-color:var(--ns)}
-  tr.cat-ni td.name-cell{border-left-color:var(--ni)}
+  tr.cat-notimpl td.name-cell{border-left-color:var(--ni)} tr.cat-trace td.name-cell{border-left-color:var(--trace)}
 
   #empty { padding:40px 16px; color:var(--muted); }
   code { background:#333; padding:1px 5px; border-radius:3px; }
