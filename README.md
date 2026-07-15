@@ -6,9 +6,9 @@ Open the `.xml` produced by a CTT run and get an instant, color-coded, collapsib
 
 > **Privacy:** everything runs locally in your browser via the File API. Your result files never leave your machine and are never uploaded anywhere.
 
-<!-- Add a screenshot to make the README pop:
-![Screenshot](docs/screenshot.png)
--->
+---
+
+![OPC UA CTT Result Viewer](opcua_ctt_result_viewer.png "OPC UA CTT Result Viewer")
 
 ---
 
